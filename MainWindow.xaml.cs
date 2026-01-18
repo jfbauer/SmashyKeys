@@ -1,4 +1,3 @@
-using System.Media;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -12,13 +11,21 @@ namespace SmashyKeys;
 public partial class MainWindow : Window
 {
     private KeyboardHook? _keyboardHook;
-    private readonly DispatcherTimer _floatingTimer;
+    private SoundManager? _soundManager;
+    private readonly DispatcherTimer _physicsTimer;
     private readonly DispatcherTimer _backgroundTimer;
     private readonly DispatcherTimer _cleanupTimer;
     private readonly List<FloatingObject> _floatingObjects = new();
     private readonly Random _random = new();
     private bool _welcomeHidden;
     private int _backgroundColorIndex;
+
+    // Physics constants
+    private const double Friction = 0.995;          // Very slow decay (0.995 = objects keep moving a long time)
+    private const double CollisionElasticity = 0.8; // How bouncy collisions are
+    private const double SpawnForce = 8.0;          // Force applied to nearby objects when spawning
+    private const double SpawnForceRadius = 150.0;  // How far the spawn force reaches
+    private const double MinVelocity = 0.1;         // Below this, velocity is zeroed
 
     private readonly Color[] _backgroundColors =
     {
@@ -33,24 +40,24 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // Timer for animating floating objects
-        _floatingTimer = new DispatcherTimer
+        // Physics timer at 60fps
+        _physicsTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(16) // ~60fps
+            Interval = TimeSpan.FromMilliseconds(16)
         };
-        _floatingTimer.Tick += FloatingTimer_Tick;
+        _physicsTimer.Tick += PhysicsTimer_Tick;
 
-        // Timer for background color transitions
+        // Background color transition timer
         _backgroundTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(5)
         };
         _backgroundTimer.Tick += BackgroundTimer_Tick;
 
-        // Timer for cleaning up excess objects
+        // Cleanup timer
         _cleanupTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(2)
+            Interval = TimeSpan.FromSeconds(3)
         };
         _cleanupTimer.Tick += CleanupTimer_Tick;
     }
@@ -61,6 +68,11 @@ public partial class MainWindow : Window
 
         try
         {
+            // Initialize sound manager
+            Logger.Log("Initializing sound manager...");
+            _soundManager = new SoundManager();
+            Logger.Log("Sound manager initialized");
+
             // Install keyboard hook
             Logger.Log("Installing keyboard hook...");
             _keyboardHook = new KeyboardHook();
@@ -70,19 +82,28 @@ public partial class MainWindow : Window
             Logger.Log("Keyboard hook installed");
 
             // Start timers
-            _floatingTimer.Start();
+            _physicsTimer.Start();
             _backgroundTimer.Start();
             _cleanupTimer.Start();
             Logger.Log("Timers started");
 
             // Create some initial floating objects
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 8; i++)
             {
-                CreateFloatingObject();
+                CreateFloatingObject(
+                    _random.NextDouble() * ActualWidth,
+                    _random.NextDouble() * ActualHeight,
+                    _random.Next(30, 60),
+                    applySpawnForce: false
+                );
             }
             Logger.Log("Initial floating objects created");
 
-            // Focus window to capture all input
+            // Center cursor initially
+            Canvas.SetLeft(CursorCircle, ActualWidth / 2 - 25);
+            Canvas.SetTop(CursorCircle, ActualHeight / 2 - 25);
+
+            // Focus window
             Activate();
             Focus();
             Logger.Log("Window_Loaded completed successfully");
@@ -97,7 +118,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
         _keyboardHook?.Dispose();
-        _floatingTimer.Stop();
+        _physicsTimer.Stop();
         _backgroundTimer.Stop();
         _cleanupTimer.Stop();
     }
@@ -112,35 +133,20 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    Logger.Log($"OnKeyPressed dispatcher callback starting for keyCode: {keyCode}");
-
                     HideWelcome();
-                    Logger.Log("HideWelcome completed");
 
-                    // Create visual effect for keypress
-                    VisualEffects.CreateKeyPressEffect(EffectsCanvas, keyCode);
-                    Logger.Log("CreateKeyPressEffect completed");
-
-                    // Occasionally add a new floating object
-                    if (_random.Next(3) == 0 && _floatingObjects.Count < 20)
+                    // Create 5 smaller floating objects at random positions
+                    for (int i = 0; i < 5; i++)
                     {
-                        CreateFloatingObject();
-                        Logger.Log("CreateFloatingObject completed");
+                        var x = _random.NextDouble() * ActualWidth;
+                        var y = _random.NextDouble() * ActualHeight;
+                        CreateFloatingObject(x, y, _random.Next(25, 45), applySpawnForce: true);
                     }
 
-                    // Make existing floating objects bounce
-                    foreach (var obj in _floatingObjects)
-                    {
-                        obj.VelocityY -= _random.Next(2, 5);
-                    }
-                    Logger.Log("Floating objects bounced");
+                    // Play a sound
+                    _soundManager?.PlayRandomSound();
 
-                    // Play system sound occasionally (not Console.Beep - that crashes WPF apps!)
-                    if (_random.Next(3) == 0)
-                    {
-                        SystemSounds.Beep.Play();
-                    }
-                    Logger.Log("OnKeyPressed dispatcher callback completed");
+                    Logger.Log("OnKeyPressed completed");
                 }
                 catch (Exception ex)
                 {
@@ -167,37 +173,43 @@ public partial class MainWindow : Window
     {
         HideWelcome();
 
-        var position = e.GetPosition(EffectsCanvas);
+        var position = e.GetPosition(FloatingCanvas);
+
+        // Create visual burst effect
         VisualEffects.CreateClickEffect(EffectsCanvas, position);
 
-        // Add floating object at click position
-        if (_floatingObjects.Count < 20)
-        {
-            CreateFloatingObject(position);
-        }
+        // Create a larger object at click position
+        CreateFloatingObject(position.X, position.Y, _random.Next(40, 70), applySpawnForce: true);
+
+        // Play sound
+        _soundManager?.PlayRandomSound();
     }
 
     private void Window_MouseMove(object sender, MouseEventArgs e)
     {
-        // Create subtle trail effect on mouse move (throttled)
-        if (_random.Next(5) == 0)
+        // Update cursor position
+        var position = e.GetPosition(CursorCanvas);
+        Canvas.SetLeft(CursorCircle, position.X - 25);
+        Canvas.SetTop(CursorCircle, position.Y - 25);
+
+        // Create subtle trail effect (throttled)
+        if (_random.Next(8) == 0)
         {
-            var position = e.GetPosition(EffectsCanvas);
             var color = VisualEffects.GetRandomColor();
             var dot = new Ellipse
             {
-                Width = 10,
-                Height = 10,
+                Width = 8,
+                Height = 8,
                 Fill = new SolidColorBrush(color),
-                Opacity = 0.5
+                Opacity = 0.4
             };
 
-            Canvas.SetLeft(dot, position.X - 5);
-            Canvas.SetTop(dot, position.Y - 5);
+            Canvas.SetLeft(dot, position.X - 4);
+            Canvas.SetTop(dot, position.Y - 4);
             EffectsCanvas.Children.Add(dot);
 
             // Fade out
-            var fadeAnim = new DoubleAnimation(0.5, 0, TimeSpan.FromMilliseconds(500));
+            var fadeAnim = new DoubleAnimation(0.4, 0, TimeSpan.FromMilliseconds(400));
             fadeAnim.Completed += (s, ev) => EffectsCanvas.Children.Remove(dot);
             dot.BeginAnimation(OpacityProperty, fadeAnim);
         }
@@ -214,9 +226,8 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CreateFloatingObject(Point? position = null)
+    private void CreateFloatingObject(double x, double y, int size, bool applySpawnForce)
     {
-        var size = _random.Next(40, 100);
         var color = VisualEffects.GetRandomColor();
 
         FrameworkElement shape;
@@ -228,7 +239,14 @@ public partial class MainWindow : Window
                 shape = new Ellipse { Width = size, Height = size, Fill = new SolidColorBrush(color) };
                 break;
             case 1:
-                shape = new Rectangle { Width = size, Height = size, Fill = new SolidColorBrush(color), RadiusX = 8, RadiusY = 8 };
+                shape = new Rectangle
+                {
+                    Width = size,
+                    Height = size,
+                    Fill = new SolidColorBrush(color),
+                    RadiusX = size * 0.15,
+                    RadiusY = size * 0.15
+                };
                 break;
             case 2:
                 shape = CreateStar(color, size);
@@ -244,23 +262,29 @@ public partial class MainWindow : Window
                 break;
         }
 
-        var x = position?.X ?? _random.NextDouble() * ActualWidth;
-        var y = position?.Y ?? _random.NextDouble() * ActualHeight;
+        // Clamp position to stay within bounds
+        x = Math.Clamp(x, size / 2.0, ActualWidth - size / 2.0);
+        y = Math.Clamp(y, size / 2.0, ActualHeight - size / 2.0);
 
-        Canvas.SetLeft(shape, x);
-        Canvas.SetTop(shape, y);
+        Canvas.SetLeft(shape, x - size / 2.0);
+        Canvas.SetTop(shape, y - size / 2.0);
         FloatingCanvas.Children.Add(shape);
+
+        // Random initial velocity
+        var angle = _random.NextDouble() * Math.PI * 2;
+        var speed = _random.NextDouble() * 3 + 1;
 
         var floatingObj = new FloatingObject
         {
             Element = shape,
             X = x,
             Y = y,
-            VelocityX = (_random.NextDouble() - 0.5) * 4,
-            VelocityY = (_random.NextDouble() - 0.5) * 4,
-            Size = size,
-            RotationSpeed = (_random.NextDouble() - 0.5) * 3,
-            Rotation = 0
+            VelocityX = Math.Cos(angle) * speed,
+            VelocityY = Math.Sin(angle) * speed,
+            Radius = size / 2.0,
+            Mass = size, // Larger objects are heavier
+            Rotation = 0,
+            RotationSpeed = (_random.NextDouble() - 0.5) * 4
         };
 
         // Add rotation transform
@@ -268,6 +292,39 @@ public partial class MainWindow : Window
         shape.RenderTransformOrigin = new Point(0.5, 0.5);
 
         _floatingObjects.Add(floatingObj);
+
+        // Apply force to nearby objects (push them away)
+        if (applySpawnForce)
+        {
+            ApplySpawnForce(floatingObj);
+        }
+    }
+
+    private void ApplySpawnForce(FloatingObject newObj)
+    {
+        foreach (var obj in _floatingObjects)
+        {
+            if (obj == newObj) continue;
+
+            var dx = obj.X - newObj.X;
+            var dy = obj.Y - newObj.Y;
+            var distance = Math.Sqrt(dx * dx + dy * dy);
+
+            if (distance < SpawnForceRadius && distance > 0.1)
+            {
+                // Normalize direction
+                var nx = dx / distance;
+                var ny = dy / distance;
+
+                // Force decreases with distance
+                var forceMagnitude = SpawnForce * (1 - distance / SpawnForceRadius);
+
+                // Apply force (lighter objects get pushed more)
+                var acceleration = forceMagnitude / (obj.Mass * 0.1);
+                obj.VelocityX += nx * acceleration;
+                obj.VelocityY += ny * acceleration;
+            }
+        }
     }
 
     private Polygon CreateStar(Color color, int size)
@@ -296,53 +353,127 @@ public partial class MainWindow : Window
         };
     }
 
-    private void FloatingTimer_Tick(object? sender, EventArgs e)
+    private void PhysicsTimer_Tick(object? sender, EventArgs e)
     {
-        foreach (var obj in _floatingObjects.ToList())
+        // First, handle collisions between objects
+        HandleCollisions();
+
+        // Then update positions
+        foreach (var obj in _floatingObjects)
         {
-            // Apply gravity
-            obj.VelocityY += 0.1;
+            // Apply friction (slow velocity decay)
+            obj.VelocityX *= Friction;
+            obj.VelocityY *= Friction;
+
+            // Zero out very small velocities
+            if (Math.Abs(obj.VelocityX) < MinVelocity) obj.VelocityX = 0;
+            if (Math.Abs(obj.VelocityY) < MinVelocity) obj.VelocityY = 0;
 
             // Apply velocity
             obj.X += obj.VelocityX;
             obj.Y += obj.VelocityY;
 
-            // Bounce off walls
-            if (obj.X <= 0 || obj.X >= ActualWidth - obj.Size)
+            // Bounce off walls (keep objects fully on screen)
+            var minX = obj.Radius;
+            var maxX = ActualWidth - obj.Radius;
+            var minY = obj.Radius;
+            var maxY = ActualHeight - obj.Radius;
+
+            if (obj.X < minX)
             {
-                obj.VelocityX *= -0.8;
-                obj.X = Math.Clamp(obj.X, 0, ActualWidth - obj.Size);
+                obj.X = minX;
+                obj.VelocityX = Math.Abs(obj.VelocityX) * CollisionElasticity;
+            }
+            else if (obj.X > maxX)
+            {
+                obj.X = maxX;
+                obj.VelocityX = -Math.Abs(obj.VelocityX) * CollisionElasticity;
             }
 
-            if (obj.Y >= ActualHeight - obj.Size)
+            if (obj.Y < minY)
             {
-                obj.VelocityY *= -0.7;
-                obj.Y = ActualHeight - obj.Size;
-
-                // Add some horizontal movement on bounce
-                obj.VelocityX += (_random.NextDouble() - 0.5) * 2;
+                obj.Y = minY;
+                obj.VelocityY = Math.Abs(obj.VelocityY) * CollisionElasticity;
             }
-
-            if (obj.Y < 0)
+            else if (obj.Y > maxY)
             {
-                obj.VelocityY *= -0.8;
-                obj.Y = 0;
+                obj.Y = maxY;
+                obj.VelocityY = -Math.Abs(obj.VelocityY) * CollisionElasticity;
             }
-
-            // Apply friction
-            obj.VelocityX *= 0.995;
 
             // Update rotation
             obj.Rotation += obj.RotationSpeed;
+            obj.RotationSpeed *= 0.998; // Rotation also slows down
 
-            // Update position
-            Canvas.SetLeft(obj.Element, obj.X);
-            Canvas.SetTop(obj.Element, obj.Y);
+            // Update visual position
+            Canvas.SetLeft(obj.Element, obj.X - obj.Radius);
+            Canvas.SetTop(obj.Element, obj.Y - obj.Radius);
 
             // Update rotation
             if (obj.Element.RenderTransform is RotateTransform rotateTransform)
             {
                 rotateTransform.Angle = obj.Rotation;
+            }
+        }
+    }
+
+    private void HandleCollisions()
+    {
+        for (int i = 0; i < _floatingObjects.Count; i++)
+        {
+            for (int j = i + 1; j < _floatingObjects.Count; j++)
+            {
+                var a = _floatingObjects[i];
+                var b = _floatingObjects[j];
+
+                var dx = b.X - a.X;
+                var dy = b.Y - a.Y;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+                var minDist = a.Radius + b.Radius;
+
+                if (distance < minDist && distance > 0.01)
+                {
+                    // Collision detected - resolve it
+
+                    // Normalize collision normal
+                    var nx = dx / distance;
+                    var ny = dy / distance;
+
+                    // Relative velocity
+                    var dvx = a.VelocityX - b.VelocityX;
+                    var dvy = a.VelocityY - b.VelocityY;
+
+                    // Relative velocity along collision normal
+                    var dvn = dvx * nx + dvy * ny;
+
+                    // Only resolve if objects are moving toward each other
+                    if (dvn > 0)
+                    {
+                        // Calculate impulse (considering mass)
+                        var totalMass = a.Mass + b.Mass;
+                        var impulse = (2 * dvn) / totalMass * CollisionElasticity;
+
+                        // Apply impulse
+                        a.VelocityX -= impulse * b.Mass * nx;
+                        a.VelocityY -= impulse * b.Mass * ny;
+                        b.VelocityX += impulse * a.Mass * nx;
+                        b.VelocityY += impulse * a.Mass * ny;
+
+                        // Add some spin from collision
+                        a.RotationSpeed += (_random.NextDouble() - 0.5) * 2;
+                        b.RotationSpeed += (_random.NextDouble() - 0.5) * 2;
+                    }
+
+                    // Separate overlapping objects
+                    var overlap = minDist - distance;
+                    var separationX = nx * overlap * 0.5;
+                    var separationY = ny * overlap * 0.5;
+
+                    a.X -= separationX;
+                    a.Y -= separationY;
+                    b.X += separationX;
+                    b.Y += separationY;
+                }
             }
         }
     }
@@ -364,16 +495,16 @@ public partial class MainWindow : Window
 
     private void CleanupTimer_Tick(object? sender, EventArgs e)
     {
-        // Remove excess floating objects
-        while (_floatingObjects.Count > 15)
+        // Remove excess floating objects (keep max 40)
+        while (_floatingObjects.Count > 40)
         {
             var obj = _floatingObjects[0];
             FloatingCanvas.Children.Remove(obj.Element);
             _floatingObjects.RemoveAt(0);
         }
 
-        // Clean up any leftover effect elements (shouldn't happen but just in case)
-        while (EffectsCanvas.Children.Count > 100)
+        // Clean up leftover effect elements
+        while (EffectsCanvas.Children.Count > 80)
         {
             EffectsCanvas.Children.RemoveAt(0);
         }
@@ -386,7 +517,8 @@ public partial class MainWindow : Window
         public double Y { get; set; }
         public double VelocityX { get; set; }
         public double VelocityY { get; set; }
-        public int Size { get; set; }
+        public double Radius { get; set; }
+        public double Mass { get; set; }
         public double Rotation { get; set; }
         public double RotationSpeed { get; set; }
     }

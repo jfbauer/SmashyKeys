@@ -71,5 +71,20 @@
                        FontSize="24"
                        Foreground="White"/>
         </Border>
+
+        <!-- Custom cursor overlay (hollow circle) -->
+        <Canvas x:Name="CursorCanvas" IsHitTestVisible="False">
+            <Ellipse x:Name="CursorCircle"
+                     Width="50"
+                     Height="50"
+                     Stroke="White"
+                     StrokeThickness="3"
+                     Fill="Transparent"
+                     Opacity="0.7">
+                <Ellipse.Effect>
+                    <DropShadowEffect Color="Cyan" BlurRadius="10" ShadowDepth="0"/>
+                </Ellipse.Effect>
+            </Ellipse>
+        </Canvas>
     </Grid>
 </Window>
