@@ -7,10 +7,7 @@ namespace SmashyKeys.Mobile;
 public class SoundManager
 {
     private readonly Random _random = new();
-    
-    // Musical notes (frequencies in Hz)
-    private readonly int[] _toneTypes = { 0, 1, 2, 3, 4, 5, 6, 7 }; // ToneGenerator types
-    
+
     public void PlayRandomSound()
     {
 #if ANDROID
@@ -31,14 +28,14 @@ public class SoundManager
                     #pragma warning restore CA1422
                 }
             }
-            
+
             // Play a short tone
             Task.Run(() =>
             {
                 try
                 {
-                    using var toneGen = new ToneGenerator(Stream.Music, 50); // 50% volume
-                    var toneType = (ToneType)_random.Next(0, 8);
+                    using var toneGen = new ToneGenerator(Android.Media.Stream.Music, 50); // 50% volume
+                    var toneType = (Tone)_random.Next(0, 8);
                     toneGen.StartTone(toneType, 100); // 100ms duration
                 }
                 catch

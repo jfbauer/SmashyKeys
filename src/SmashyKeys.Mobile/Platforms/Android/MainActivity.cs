@@ -23,25 +23,8 @@ public class MainActivity : MauiAppCompatActivity
             Window.SetFlags(WindowManagerFlags.Fullscreen, WindowManagerFlags.Fullscreen);
             Window.AddFlags(WindowManagerFlags.KeepScreenOn);
 
-            // Hide system UI
-            if (Build.VERSION.SdkInt >= BuildVersionCodes.R)
-            {
-                Window.SetDecorFitsSystemWindows(false);
-                Window.InsetsController?.Hide(WindowInsets.Type.SystemBars());
-                Window.InsetsController!.SystemBarsBehavior = (int)WindowInsetsControllerBehavior.ShowTransientBarsBySwipe;
-            }
-            else
-            {
-#pragma warning disable CA1422
-                Window.DecorView.SystemUiVisibility = (StatusBarVisibility)(
-                    SystemUiFlags.Fullscreen |
-                    SystemUiFlags.HideNavigation |
-                    SystemUiFlags.ImmersiveSticky |
-                    SystemUiFlags.LayoutFullscreen |
-                    SystemUiFlags.LayoutHideNavigation |
-                    SystemUiFlags.LayoutStable);
-#pragma warning restore CA1422
-            }
+            // Hide system UI - use legacy method which works across all versions
+            HideSystemUI();
         }
     }
 
@@ -50,22 +33,22 @@ public class MainActivity : MauiAppCompatActivity
         base.OnResume();
 
         // Re-hide system UI when resuming
-        if (Window != null)
-        {
-            if (Build.VERSION.SdkInt >= BuildVersionCodes.R)
-            {
-                Window.InsetsController?.Hide(WindowInsets.Type.SystemBars());
-            }
-            else
-            {
-#pragma warning disable CA1422
-                Window.DecorView.SystemUiVisibility = (StatusBarVisibility)(
-                    SystemUiFlags.Fullscreen |
-                    SystemUiFlags.HideNavigation |
-                    SystemUiFlags.ImmersiveSticky);
-#pragma warning restore CA1422
-            }
-        }
+        HideSystemUI();
+    }
+
+    private void HideSystemUI()
+    {
+        if (Window == null) return;
+
+#pragma warning disable CS0618, CA1422 // Using obsolete API for compatibility
+        Window.DecorView.SystemUiVisibility = (StatusBarVisibility)(
+            SystemUiFlags.Fullscreen |
+            SystemUiFlags.HideNavigation |
+            SystemUiFlags.ImmersiveSticky |
+            SystemUiFlags.LayoutFullscreen |
+            SystemUiFlags.LayoutHideNavigation |
+            SystemUiFlags.LayoutStable);
+#pragma warning restore CS0618, CA1422
     }
 
     // Override back button behavior
