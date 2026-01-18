@@ -1,3 +1,4 @@
+using System.Media;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -56,26 +57,41 @@ public partial class MainWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        // Install keyboard hook
-        _keyboardHook = new KeyboardHook();
-        _keyboardHook.KeyPressed += OnKeyPressed;
-        _keyboardHook.SecretExitTriggered += OnSecretExit;
-        _keyboardHook.Install();
+        Logger.Log("Window_Loaded started");
 
-        // Start timers
-        _floatingTimer.Start();
-        _backgroundTimer.Start();
-        _cleanupTimer.Start();
-
-        // Create some initial floating objects
-        for (int i = 0; i < 5; i++)
+        try
         {
-            CreateFloatingObject();
-        }
+            // Install keyboard hook
+            Logger.Log("Installing keyboard hook...");
+            _keyboardHook = new KeyboardHook();
+            _keyboardHook.KeyPressed += OnKeyPressed;
+            _keyboardHook.SecretExitTriggered += OnSecretExit;
+            _keyboardHook.Install();
+            Logger.Log("Keyboard hook installed");
 
-        // Focus window to capture all input
-        Activate();
-        Focus();
+            // Start timers
+            _floatingTimer.Start();
+            _backgroundTimer.Start();
+            _cleanupTimer.Start();
+            Logger.Log("Timers started");
+
+            // Create some initial floating objects
+            for (int i = 0; i < 5; i++)
+            {
+                CreateFloatingObject();
+            }
+            Logger.Log("Initial floating objects created");
+
+            // Focus window to capture all input
+            Activate();
+            Focus();
+            Logger.Log("Window_Loaded completed successfully");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogException("Window_Loaded", ex);
+            throw;
+        }
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -88,31 +104,54 @@ public partial class MainWindow : Window
 
     private void OnKeyPressed(int keyCode)
     {
-        Dispatcher.Invoke(() =>
+        try
         {
-            HideWelcome();
+            Logger.Log($"OnKeyPressed called with keyCode: {keyCode}");
 
-            // Create visual effect for keypress
-            VisualEffects.CreateKeyPressEffect(EffectsCanvas, keyCode);
-
-            // Occasionally add a new floating object
-            if (_random.Next(3) == 0 && _floatingObjects.Count < 20)
+            Dispatcher.BeginInvoke(() =>
             {
-                CreateFloatingObject();
-            }
+                try
+                {
+                    Logger.Log($"OnKeyPressed dispatcher callback starting for keyCode: {keyCode}");
 
-            // Make existing floating objects bounce
-            foreach (var obj in _floatingObjects)
-            {
-                obj.VelocityY -= _random.Next(2, 5);
-            }
+                    HideWelcome();
+                    Logger.Log("HideWelcome completed");
 
-            // Play a beep (optional - uses system beep)
-            if (_random.Next(2) == 0)
-            {
-                Console.Beep(_random.Next(200, 800), 50);
-            }
-        });
+                    // Create visual effect for keypress
+                    VisualEffects.CreateKeyPressEffect(EffectsCanvas, keyCode);
+                    Logger.Log("CreateKeyPressEffect completed");
+
+                    // Occasionally add a new floating object
+                    if (_random.Next(3) == 0 && _floatingObjects.Count < 20)
+                    {
+                        CreateFloatingObject();
+                        Logger.Log("CreateFloatingObject completed");
+                    }
+
+                    // Make existing floating objects bounce
+                    foreach (var obj in _floatingObjects)
+                    {
+                        obj.VelocityY -= _random.Next(2, 5);
+                    }
+                    Logger.Log("Floating objects bounced");
+
+                    // Play system sound occasionally (not Console.Beep - that crashes WPF apps!)
+                    if (_random.Next(3) == 0)
+                    {
+                        SystemSounds.Beep.Play();
+                    }
+                    Logger.Log("OnKeyPressed dispatcher callback completed");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogException("OnKeyPressed dispatcher callback", ex);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogException("OnKeyPressed", ex);
+        }
     }
 
     private void OnSecretExit()

@@ -66,9 +66,20 @@ public class KeyboardHook : IDisposable
 
     public void Install()
     {
-        using var curProcess = Process.GetCurrentProcess();
-        using var curModule = curProcess.MainModule!;
-        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(curModule.ModuleName!), 0);
+        try
+        {
+            Logger.Log("KeyboardHook.Install starting...");
+            using var curProcess = Process.GetCurrentProcess();
+            using var curModule = curProcess.MainModule!;
+            Logger.Log($"Got module: {curModule.ModuleName}");
+            _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(curModule.ModuleName!), 0);
+            Logger.Log($"Hook installed, hookId: {_hookId}");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogException("KeyboardHook.Install", ex);
+            throw;
+        }
     }
 
     public void Uninstall()
@@ -84,10 +95,13 @@ public class KeyboardHook : IDisposable
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0)
+        try
         {
-            int vkCode = Marshal.ReadInt32(lParam);
-            bool isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
+            if (nCode >= 0)
+            {
+                int vkCode = Marshal.ReadInt32(lParam);
+                bool isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
+                Logger.Log($"HookCallback: nCode={nCode}, vkCode={vkCode}, isKeyDown={isKeyDown}");
 
             // Check for secret parent exit combo: Ctrl+Shift+Q
             bool ctrlDown = IsKeyDown(VK_LCONTROL) || IsKeyDown(VK_RCONTROL);
@@ -153,21 +167,32 @@ public class KeyboardHook : IDisposable
             // Fire key pressed event for visual effects (only on key down, not blocked system keys)
             if (isKeyDown && !shouldBlock)
             {
+                Logger.Log($"Firing KeyPressed event for vkCode={vkCode}");
                 KeyPressed?.Invoke(vkCode);
+                Logger.Log("KeyPressed event completed");
             }
             else if (isKeyDown && shouldBlock && vkCode != VK_LWIN && vkCode != VK_RWIN)
             {
                 // Still fire visual event for blocked keys (except Windows keys)
+                Logger.Log($"Firing KeyPressed event (blocked key) for vkCode={vkCode}");
                 KeyPressed?.Invoke(vkCode);
+                Logger.Log("KeyPressed event (blocked key) completed");
             }
 
             if (shouldBlock)
             {
+                Logger.Log($"Blocking key vkCode={vkCode}");
                 return (IntPtr)1; // Block the key
             }
-        }
+            }
 
-        return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogException("HookCallback", ex);
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
     }
 
     public void Dispose()
