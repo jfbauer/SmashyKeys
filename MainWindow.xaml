@@ -11,7 +11,9 @@
         Loaded="Window_Loaded"
         Closing="Window_Closing"
         MouseDown="Window_MouseDown"
-        MouseMove="Window_MouseMove">
+        MouseMove="Window_MouseMove"
+        MouseWheel="Window_MouseWheel"
+        MouseRightButtonDown="Window_MouseRightButtonDown">
 
     <Grid>
         <!-- Colorful gradient background that changes -->

@@ -20,12 +20,26 @@ public partial class MainWindow : Window
     private bool _welcomeHidden;
     private int _backgroundColorIndex;
 
+    // Active vortex (right-click tornado effect)
+    private Point? _vortexCenter;
+    private DateTime _vortexStartTime;
+    private const double VortexDuration = 2.0;      // Seconds the vortex lasts
+    private const double VortexRadius = 300.0;      // Range of the vortex effect
+    private const double VortexStrength = 15.0;     // How strong the pull/spin is
+
     // Physics constants
-    private const double Friction = 0.995;          // Very slow decay (0.995 = objects keep moving a long time)
+    private const double Friction = 0.995;          // Very slow decay
     private const double CollisionElasticity = 0.8; // How bouncy collisions are
-    private const double SpawnForce = 8.0;          // Force applied to nearby objects when spawning
-    private const double SpawnForceRadius = 150.0;  // How far the spawn force reaches
+    private const double SpawnForce = 12.0;         // Force applied to nearby objects when spawning (increased)
+    private const double SpawnForceRadius = 200.0;  // How far the spawn force reaches (increased)
     private const double MinVelocity = 0.1;         // Below this, velocity is zeroed
+    private const double ScrollForce = 6.0;         // Force applied by scroll wheel
+    private const double ScrollVariance = 0.4;      // Angular variance for scroll (in radians, ~23 degrees)
+
+    // Object limits
+    private const int SoftCap = 100;                // Above this, only remove slow objects
+    private const int HardCap = 200;                // Above this, force remove oldest
+    private const double SlowSpeedThreshold = 0.5;  // Objects slower than this are "slow"
 
     private readonly Color[] _backgroundColors =
     {
@@ -57,7 +71,7 @@ public partial class MainWindow : Window
         // Cleanup timer
         _cleanupTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(3)
+            Interval = TimeSpan.FromSeconds(1)
         };
         _cleanupTimer.Tick += CleanupTimer_Tick;
     }
@@ -88,7 +102,7 @@ public partial class MainWindow : Window
             Logger.Log("Timers started");
 
             // Create some initial floating objects
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < 12; i++)
             {
                 CreateFloatingObject(
                     _random.NextDouble() * ActualWidth,
@@ -171,6 +185,9 @@ public partial class MainWindow : Window
 
     private void Window_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        // Only handle left click here (right click has its own handler)
+        if (e.ChangedButton != MouseButton.Left) return;
+
         HideWelcome();
 
         var position = e.GetPosition(FloatingCanvas);
@@ -183,6 +200,145 @@ public partial class MainWindow : Window
 
         // Play sound
         _soundManager?.PlayRandomSound();
+    }
+
+    private void Window_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        HideWelcome();
+
+        var position = e.GetPosition(FloatingCanvas);
+
+        // Start a vortex/tornado at this position
+        _vortexCenter = position;
+        _vortexStartTime = DateTime.Now;
+
+        // Create a visual indicator for the vortex
+        CreateVortexVisual(position);
+
+        // Play sound
+        _soundManager?.PlayRandomSound();
+
+        Logger.Log($"Vortex started at {position}");
+    }
+
+    private void CreateVortexVisual(Point position)
+    {
+        // Create expanding rings to show the vortex
+        for (int i = 0; i < 3; i++)
+        {
+            var ring = new Ellipse
+            {
+                Width = 40,
+                Height = 40,
+                Stroke = new SolidColorBrush(VisualEffects.GetRandomColor()),
+                StrokeThickness = 3,
+                Fill = Brushes.Transparent,
+                Opacity = 0.8
+            };
+
+            Canvas.SetLeft(ring, position.X - 20);
+            Canvas.SetTop(ring, position.Y - 20);
+            EffectsCanvas.Children.Add(ring);
+
+            // Animate expanding outward
+            var delay = TimeSpan.FromMilliseconds(i * 200);
+            var duration = TimeSpan.FromMilliseconds(1500);
+
+            var widthAnim = new DoubleAnimation(40, VortexRadius * 2, duration) { BeginTime = delay };
+            var heightAnim = new DoubleAnimation(40, VortexRadius * 2, duration) { BeginTime = delay };
+            var opacityAnim = new DoubleAnimation(0.8, 0, duration) { BeginTime = delay };
+
+            var translate = new TranslateTransform();
+            ring.RenderTransform = translate;
+
+            var moveXAnim = new DoubleAnimation(0, -VortexRadius + 20, duration) { BeginTime = delay };
+            var moveYAnim = new DoubleAnimation(0, -VortexRadius + 20, duration) { BeginTime = delay };
+
+            opacityAnim.Completed += (s, ev) => EffectsCanvas.Children.Remove(ring);
+
+            ring.BeginAnimation(WidthProperty, widthAnim);
+            ring.BeginAnimation(HeightProperty, heightAnim);
+            ring.BeginAnimation(OpacityProperty, opacityAnim);
+            translate.BeginAnimation(TranslateTransform.XProperty, moveXAnim);
+            translate.BeginAnimation(TranslateTransform.YProperty, moveYAnim);
+        }
+    }
+
+    private void Window_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        HideWelcome();
+
+        // Delta > 0 = scroll up, Delta < 0 = scroll down
+        bool scrollUp = e.Delta > 0;
+
+        // Base direction: up = -PI/2 (north), down = PI/2 (south)
+        double baseAngle = scrollUp ? -Math.PI / 2 : Math.PI / 2;
+
+        // Apply force to all objects with variance
+        foreach (var obj in _floatingObjects)
+        {
+            // Random variance between -ScrollVariance and +ScrollVariance
+            double variance = (_random.NextDouble() * 2 - 1) * ScrollVariance;
+            double angle = baseAngle + variance;
+
+            // Random force magnitude with some variance too
+            double force = ScrollForce * (0.7 + _random.NextDouble() * 0.6);
+
+            obj.VelocityX += Math.Cos(angle) * force;
+            obj.VelocityY += Math.Sin(angle) * force;
+
+            // Add some spin
+            obj.RotationSpeed += (_random.NextDouble() - 0.5) * 3;
+        }
+
+        // Play sound
+        _soundManager?.PlayRandomSound();
+
+        // Create visual effect at mouse position
+        var position = e.GetPosition(EffectsCanvas);
+        CreateScrollVisual(position, scrollUp);
+
+        Logger.Log($"Scroll {(scrollUp ? "up" : "down")}, applied force to {_floatingObjects.Count} objects");
+    }
+
+    private void CreateScrollVisual(Point position, bool scrollUp)
+    {
+        // Create arrows showing the direction
+        var color = VisualEffects.GetRandomColor();
+
+        for (int i = 0; i < 5; i++)
+        {
+            var arrow = new Polygon
+            {
+                Points = new PointCollection
+                {
+                    new Point(0, scrollUp ? 20 : 0),
+                    new Point(10, scrollUp ? 0 : 20),
+                    new Point(20, scrollUp ? 20 : 0)
+                },
+                Fill = new SolidColorBrush(color),
+                Opacity = 0.8
+            };
+
+            var x = position.X - 10 + (_random.NextDouble() - 0.5) * 100;
+            var y = position.Y - 10;
+
+            Canvas.SetLeft(arrow, x);
+            Canvas.SetTop(arrow, y);
+            EffectsCanvas.Children.Add(arrow);
+
+            // Animate moving in scroll direction and fading
+            var translate = new TranslateTransform();
+            arrow.RenderTransform = translate;
+
+            var moveYAnim = new DoubleAnimation(0, scrollUp ? -100 : 100, TimeSpan.FromMilliseconds(500));
+            var fadeAnim = new DoubleAnimation(0.8, 0, TimeSpan.FromMilliseconds(500));
+
+            fadeAnim.Completed += (s, ev) => EffectsCanvas.Children.Remove(arrow);
+
+            translate.BeginAnimation(TranslateTransform.YProperty, moveYAnim);
+            arrow.BeginAnimation(OpacityProperty, fadeAnim);
+        }
     }
 
     private void Window_MouseMove(object sender, MouseEventArgs e)
@@ -282,9 +438,10 @@ public partial class MainWindow : Window
             VelocityX = Math.Cos(angle) * speed,
             VelocityY = Math.Sin(angle) * speed,
             Radius = size / 2.0,
-            Mass = size, // Larger objects are heavier
+            Mass = size,
             Rotation = 0,
-            RotationSpeed = (_random.NextDouble() - 0.5) * 4
+            RotationSpeed = (_random.NextDouble() - 0.5) * 4,
+            CreatedAt = DateTime.Now
         };
 
         // Add rotation transform
@@ -323,6 +480,9 @@ public partial class MainWindow : Window
                 var acceleration = forceMagnitude / (obj.Mass * 0.1);
                 obj.VelocityX += nx * acceleration;
                 obj.VelocityY += ny * acceleration;
+
+                // Add spin from the push
+                obj.RotationSpeed += (_random.NextDouble() - 0.5) * 2;
             }
         }
     }
@@ -355,10 +515,13 @@ public partial class MainWindow : Window
 
     private void PhysicsTimer_Tick(object? sender, EventArgs e)
     {
-        // First, handle collisions between objects
+        // Apply vortex effect if active
+        ApplyVortexEffect();
+
+        // Handle collisions between objects
         HandleCollisions();
 
-        // Then update positions
+        // Update positions
         foreach (var obj in _floatingObjects)
         {
             // Apply friction (slow velocity decay)
@@ -413,6 +576,54 @@ public partial class MainWindow : Window
             if (obj.Element.RenderTransform is RotateTransform rotateTransform)
             {
                 rotateTransform.Angle = obj.Rotation;
+            }
+        }
+    }
+
+    private void ApplyVortexEffect()
+    {
+        if (_vortexCenter == null) return;
+
+        var elapsed = (DateTime.Now - _vortexStartTime).TotalSeconds;
+        if (elapsed > VortexDuration)
+        {
+            _vortexCenter = null;
+            return;
+        }
+
+        // Vortex strength fades over time
+        var strengthMultiplier = 1 - (elapsed / VortexDuration);
+        var center = _vortexCenter.Value;
+
+        foreach (var obj in _floatingObjects)
+        {
+            var dx = obj.X - center.X;
+            var dy = obj.Y - center.Y;
+            var distance = Math.Sqrt(dx * dx + dy * dy);
+
+            if (distance < VortexRadius && distance > 10)
+            {
+                // Normalize direction to center
+                var nx = dx / distance;
+                var ny = dy / distance;
+
+                // Tangential direction (perpendicular to radial - creates spin)
+                var tx = -ny;
+                var ty = nx;
+
+                // Force decreases with distance from center
+                var distanceFactor = 1 - (distance / VortexRadius);
+                var force = VortexStrength * distanceFactor * strengthMultiplier;
+
+                // Apply tangential force (spinning) and slight inward pull
+                var tangentialForce = force * 0.8;
+                var inwardForce = force * 0.3;
+
+                obj.VelocityX += tx * tangentialForce - nx * inwardForce;
+                obj.VelocityY += ty * tangentialForce - ny * inwardForce;
+
+                // Add spin to the objects themselves
+                obj.RotationSpeed += force * 0.5 * (distance < VortexRadius / 2 ? 1 : -1);
             }
         }
     }
@@ -495,19 +706,55 @@ public partial class MainWindow : Window
 
     private void CleanupTimer_Tick(object? sender, EventArgs e)
     {
-        // Remove excess floating objects (keep max 40)
-        while (_floatingObjects.Count > 40)
+        var count = _floatingObjects.Count;
+
+        if (count > HardCap)
         {
-            var obj = _floatingObjects[0];
-            FloatingCanvas.Children.Remove(obj.Element);
-            _floatingObjects.RemoveAt(0);
+            // Above hard cap: remove oldest objects to get back to hard cap
+            var toRemove = count - HardCap;
+            Logger.Log($"Hard cap cleanup: removing {toRemove} oldest objects");
+
+            for (int i = 0; i < toRemove && _floatingObjects.Count > 0; i++)
+            {
+                var obj = _floatingObjects[0]; // Oldest is first
+                FloatingCanvas.Children.Remove(obj.Element);
+                _floatingObjects.RemoveAt(0);
+            }
+        }
+        else if (count > SoftCap)
+        {
+            // Between soft and hard cap: only remove slow-moving objects
+            var slowObjects = _floatingObjects
+                .Where(o => GetSpeed(o) < SlowSpeedThreshold)
+                .OrderBy(o => GetSpeed(o))
+                .ToList();
+
+            // Remove up to (count - SoftCap) slow objects, but don't go below SoftCap
+            var canRemove = Math.Min(slowObjects.Count, count - SoftCap);
+
+            if (canRemove > 0)
+            {
+                Logger.Log($"Soft cap cleanup: removing {canRemove} slow objects");
+
+                for (int i = 0; i < canRemove; i++)
+                {
+                    var obj = slowObjects[i];
+                    FloatingCanvas.Children.Remove(obj.Element);
+                    _floatingObjects.Remove(obj);
+                }
+            }
         }
 
         // Clean up leftover effect elements
-        while (EffectsCanvas.Children.Count > 80)
+        while (EffectsCanvas.Children.Count > 100)
         {
             EffectsCanvas.Children.RemoveAt(0);
         }
+    }
+
+    private static double GetSpeed(FloatingObject obj)
+    {
+        return Math.Sqrt(obj.VelocityX * obj.VelocityX + obj.VelocityY * obj.VelocityY);
     }
 
     private class FloatingObject
@@ -521,5 +768,6 @@ public partial class MainWindow : Window
         public double Mass { get; set; }
         public double Rotation { get; set; }
         public double RotationSpeed { get; set; }
+        public DateTime CreatedAt { get; set; }
     }
 }
